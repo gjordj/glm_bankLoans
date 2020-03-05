@@ -1,0 +1,28 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1573384778828.000,
+    "dirty" : true,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1911550380",
+    "id" : "76B2B419",
+    "lastKnownWriteTime" : 1574261143,
+    "last_content_update" : 1577628355488,
+    "path" : "~/Google Drive/DATA SCIENCE-TRADING/1_CUNEF/Prediction/2_Prediction_Code/3_GLM/Loans_GLM/Loans_GLM.R",
+    "project_path" : "Loans_GLM.R",
+    "properties" : {
+        "cursorPosition" : "184,30",
+        "docOutlineSize" : "110",
+        "docOutlineVisible" : "1",
+        "scrollLine" : "0",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

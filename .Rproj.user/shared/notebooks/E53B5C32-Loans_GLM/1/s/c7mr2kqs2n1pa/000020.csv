@@ -1,0 +1,5 @@
+"0","  xlab(""Grade"")+"
+"0","  ggtitle(""Grade Histogram"")"
+"2","Error in xlab(""Grade"") + ggtitle(""Grade Histogram"") : 
+  non-numeric argument to binary operator
+"

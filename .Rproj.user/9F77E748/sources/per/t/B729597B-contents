@@ -1,0 +1,999 @@
+---
+title: "Untitled"
+author: "Jordi Tarroch"
+date: "1/8/2020"
+output: html_document
+---
+```{r}
+# title: "Loans_GLM"
+# author: "Jordi Tarroch"
+# date: "02/10/2019"
+
+##############
+#LIBRARIES####
+##############
+library(readr)
+library(skimr)# Beautiful Summarize
+library(mltools)
+library(cleandata)
+library(shiny)
+library(onehot)
+library(PerformanceAnalytics) # Correlations
+library(corrplot)# Correlations
+library(ggcorrplot)  # Correlations
+library('ROCR')
+library(tidyverse)#select_at
+##############
+# GET DATA####
+##############
+path <- 'loan_filtered.csv'
+raw_data <-  read_csv(path)
+
+#####################
+# DATA WRANGLING ####
+#####################
+dim(raw_data)
+skim(raw_data) # Summarise
+
+# CHECK DUPLICATED DATA: no duplicated data to delete.
+# CHECK NA's: 
+raw_data<-na.omit(raw_data)
+summary(raw_data$emp_length)
+
+
+
+# ORDINAL ENCODING
+levels <- c('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years')
+raw_data$emp_length = factor(raw_data$emp_length, order = TRUE , levels)
+x <- as.data.frame(raw_data$emp_length)
+
+raw_data$emp_length <- encode_ordinal( x, levels, none='', out.int=FALSE,
+               full_print=TRUE)
+raw_data$emp_length <- as.numeric(unlist(raw_data$emp_length))
+
+
+levels <- c('A', 'B', 'C', 'D', 'E', 'F', 'G')
+raw_data$grade = factor(raw_data$grade, order = TRUE , levels)
+x <- as.data.frame(raw_data$grade)
+raw_data$grade <- encode_ordinal( x, levels, none='', out.int=FALSE,
+                                       full_print=TRUE)
+raw_data$grade <- as.numeric(unlist(raw_data$grade))
+
+# NOMINAL ENCODING - ONEHOT ENCODING
+
+# https://github.com/Zelazny7/onehot
+home_ownership <- as.data.frame(raw_data$home_ownership)
+encoder <- onehot(home_ownership, max_levels = 15, add_NA_factors = FALSE)
+home_ownership_onehot<- predict(encoder, home_ownership, stringsAsFactors=TRUE)
+head(home_ownership_onehot,10)
+raw_data <- cbind(raw_data, home_ownership_onehot)
+
+purpose <- as.data.frame(raw_data$purpose)
+encoder <- onehot(purpose, max_levels = 15, add_NA_factors = FALSE)
+purpose_onehot<- predict(encoder, purpose, stringsAsFactors=TRUE)
+head(purpose_onehot,10)
+raw_data <- cbind(raw_data, purpose_onehot)
+
+#DICOTOMIC ENCODING
+default <- (raw_data$loan_status == "Default")*1
+raw_data$default <- default
+
+raw_data$term = factor(raw_data$term)
+short_1_long_term_0 <- (raw_data$term == "36 months")*1
+raw_data$short_1_long_term_0 <- short_1_long_term_0
+
+#df<- subset(raw_data, select=-c(4,7,8,9))
+df<- subset(raw_data, select=-c(4,7,8,9,10,12,13,16,17,18,20,21,22,23,24,25,26,28,29))
+names(df)
+df$int_rate <- as.double(gsub('%','',df$int_rate))/100
+
+# Rename a column in R
+names(df)
+colnames(df)[colnames(df)=="raw_data$home_ownership_OWN"] <- "home_owner"
+colnames(df)[colnames(df)=="raw_data$home_ownership_MORTGAGE"] <- "home_mortgage"
+colnames(df)[colnames(df)=="raw_data$home_ownership_RENT"] <- "home_rent"
+colnames(df)[colnames(df)=="emp_length"] <- "employment_length"
+colnames(df)[colnames(df)=="raw_data$purpose_educational"] <- "purposeeducational"
+colnames(df)[colnames(df)=="raw_data$purpose_small_business"] <- "purposesmallbusiness"
+
+# skim(df)
+```
+
+
+```{r}
+##########################
+#EXPLORATORY DATA ANALYSIS####################################################################################
+##########################
+
+#####################
+# CORRELATION MATRIX#
+#####################
+# Correlations
+corrplot(cor(df,
+             use = "complete.obs"),
+         method = "circle",type = "upper")
+
+# Other Correlations
+ggcorrplot(cor(df),
+           hc.order = TRUE,
+           type = "lower",  lab = TRUE)
+
+res <- cor(df)
+round(res, 2)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = res, col = col, symm = TRUE)
+
+
+#Check initial correlation between variables and default based on a coefficient.
+newData <- df
+newData.cor = cor(newData)
+# corrplot(newData.cor)
+# corrplot(newData.cor, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+newData.cor <- data.frame(newData.cor)
+correlated <- c()
+variable <- c()
+coefficient_limit  <- c()
+select_columns <-  c()
+
+
+########CHANGE########
+coeff <-  0.008      #
+# default_column <- 26 #
+ default_column <- 11 #
+#####################
+newData.cor[default_column,1]
+dim(newData.cor)[1]
+for(column in 1:dim(newData.cor)[1]){
+  if(abs(newData.cor[default_column,column]) > coeff){
+    variable <-  append(variable, names(newData.cor)[column])
+    correlated  <-  append(correlated, newData.cor[default_column,column] )
+    coefficient_limit <- append(coefficient_limit,coeff)
+  }
+}
+correlated_variables <-  data.frame(variable,correlated, coefficient_limit)
+# correlated_variables <-  data.frame(variable,correlated)
+
+print(correlated_variables)
+```
+
+
+```{r}
+#############################################################
+# RELATIONSHIPS OF NUMERIC PREDICTIVE VARIABLES WITH DEFAULT#
+#############################################################
+
+# DEFAULT VS ANNUAL_INCOME#
+###########################
+ggplot(data = df, aes(x = as.factor(default), y = annual_inc)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = 'log10') +
+  ggtitle("Annual Income (log scale)") +
+  xlab("Default")+
+  ylab("Annual Income")
+
+# DEFAULT VS INT_RATE#
+######################
+ggplot(data = df, aes(x = as.factor(default), y = int_rate)) +
+  geom_boxplot() +
+  ggtitle("Interest Rate") +
+  xlab("Default")+
+  ylab("Interest Rate")
+
+
+# DEFAULT VS LOAN AMOUNT#
+#########################
+ggplot(data = df, aes(x = as.factor(default), y = loan_amnt)) +
+  geom_boxplot() +
+  ggtitle("Loan Amount") +
+  xlab("Default")+
+  ylab("Loan Amount")
+```
+
+
+```{r}
+#############################################
+# CONTINGENCY TABLE OF CATEGORICAL VARIABLES#
+#############################################
+
+# DEFAULT VS GRADE#
+###################
+## two-way contingency table of categorical outcome and predictors
+# grades: ('A', 'B', 'C', 'D', 'E', 'F', 'G')
+contingency_table <- xtabs(~default+grade, data = df)
+contingency_table_percentage <- c()
+grade <- 0
+for( grade in 1:dim(contingency_table)[2]){
+  contingency_table_percentage[grade] = contingency_table[2, grade]/contingency_table[1, grade]*100
+}
+# grades: ('A', 'B', 'C', 'D', 'E', 'F', 'G')
+contingency_table_percentage
+barplot(contingency_table_percentage,
+        main = "Default % vs Grades",
+        xlab = "Grades",
+        ylab = "Default %",
+        names.arg = c("A", "B", "C", "D", "E", "F", "G"),
+        col = "darkred",
+        horiz = FALSE)
+
+default_total <- sum(contingency_table[2,])
+
+# DEFAULT VS EMPLOYMENT_LENGTH#
+###############################
+
+## two-way contingency table of categorical outcome and predictors
+# ('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years')
+
+contingency_table <- xtabs(~default+employment_length, data = df)
+contingency_table
+contingency_table_percentage <- c()
+
+employment_length <- 0
+for( employment_length in 1:dim(contingency_table)[2]){
+  contingency_table_percentage[employment_length] = contingency_table[2, employment_length]/contingency_table[1, employment_length]*100
+}
+# ('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years')
+contingency_table_percentage
+barplot(contingency_table_percentage,
+        main = "Default % vs Employment Length",
+        xlab = "Employment Length",
+        ylab = "Default %",
+        names.arg = c('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years'),
+        col = "darkred",
+        horiz = FALSE)
+
+# DEFAULT VS HOME_MORTGAGE#
+###########################
+
+## two-way contingency table of categorical outcome and predictors
+# 0,1
+contingency_table <- xtabs(~default+home_mortgage, data = df)
+contingency_table
+contingency_table_percentage <- c()
+home_mortgage <- 0
+for( home_mortgage in 1:dim(contingency_table)[2]){
+  contingency_table_percentage[home_mortgage] = contingency_table[2, home_mortgage]/contingency_table[1, home_mortgage]*100
+}
+#0,1
+contingency_table_percentage
+barplot(contingency_table_percentage,
+        main = "Default % vs Home Mortgage",
+        xlab = "Mortgage",
+        ylab = "Default %",
+        names.arg = c('Without Mortgage', 'With Mortgage'),
+        col = "darkred",
+        horiz = FALSE)
+default_total <- sum(contingency_table[2,])
+
+# DEFAULT VS HOME_RENT#
+#######################
+
+## two-way contingency table of categorical outcome and predictors
+# 0, 1
+contingency_table <- xtabs(~default+home_rent, data = df)
+contingency_table
+contingency_table_percentage <- c()
+
+employment_length <- 0
+for( employment_length in 1:dim(contingency_table)[2]){
+  contingency_table_percentage[employment_length] = contingency_table[2, employment_length]/contingency_table[1, employment_length]*100
+}
+# ('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years')
+contingency_table_percentage
+barplot(contingency_table_percentage,
+        main = "Default % vs Home Rent",
+        xlab = "Rent",
+        ylab = "Default %",
+        names.arg = c('Without Rent', 'With Rent'),
+        col = "darkred",
+        horiz = FALSE)
+default_total <- sum(contingency_table[2,])
+default_total <- sum(contingency_table[2,])
+
+# DEFAULT VS HOME_RENT#
+#######################
+
+## two-way contingency table of categorical outcome and predictors
+# 0, 1
+contingency_table <- xtabs(~default+home_rent, data = df)
+contingency_table
+contingency_table_percentage <- c()
+
+home_rent <- 0
+for( home_rent in 1:dim(contingency_table)[2]){
+  contingency_table_percentage[home_rent] = contingency_table[2, home_rent]/contingency_table[1, home_rent]*100
+}
+# ('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years')
+contingency_table_percentage
+default_total <- sum(contingency_table[2,])
+
+#############
+# HISTOGRAMS#
+#############
+ggplot(data = df) +
+  geom_histogram(aes(annual_inc), binwidth = 100000,)+
+  xlab("Anual Income")+
+  ggtitle("Annual Histogram")
+
+ggplot(data = df) +
+  geom_histogram(aes((employment_length))) +
+  xlab("Employment Length")+
+  ggtitle("Employment Length Histogram")
+
+ggplot(data = df) +
+  geom_histogram(aes(grade))
+  xlab("Grade")+
+  ggtitle("Grade Histogram")
+
+ggplot(data = df) +
+  geom_histogram(aes(int_rate))+
+  xlab("Interest Rate")+
+  ggtitle("Interest Rate Histogram")
+
+ggplot(data = df) +
+  geom_histogram(aes(loan_amnt))+
+  xlab("Loan Amount")+
+  ggtitle("Loan Amount Histogram")
+#########END OF DATA EXPLORATORY ANALYSIS########################################################################################
+```
+
+
+```{r}
+#################################################################################################
+# PREDICTION ###################################################################################
+#################################################################################################
+
+#############################
+# Prepare data for the model#
+#############################
+# Scaling numeric variables of values not between 0-1.
+scale <- function(x) {
+  minD <- mean(x)
+  maxD <- sd(x)
+  res <- (x - minD) / (maxD)
+  return(res)
+}
+
+df$annual_inc <- scale(df$annual_inc)
+df$int_rate   <- scale(df$int_rate)
+df$employment_length <- scale(df$employment_length)
+
+# Logistic regression is a method for fitting a regression curve, y = f(x), when y is a categorical variable.
+# The typical use of this model is predicting y given a set of predictors x. The predictors can be continuous, 
+# categorical or a mix of both. 
+
+# In order to create our model we are going to use the previous predictive variables studied.
+vars <- c("purposesmallbusiness","purposeeducational","short_1_long_term_0")
+df <- df %>%  select_at(vars(-vars))
+```
+
+
+```{r}
+##################
+# MODEL (BINOMIAL) #################################################################################
+##################
+# We indicate that we use a logistic regression with the family binomial.
+mod01 = glm(default~ . ,family="binomial",data= df)
+summary(mod01)
+```
+
+
+```{r}
+##################
+# INDIVIDUAL TYPE# 
+##################
+#getmode: mode of the categorical variables to set up a standar type.
+getmode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+newdata_grade <- with(df,
+                 data.frame(
+                            annual_inc = mean(annual_inc),
+                            employment_length = getmode(employment_length),
+                            grade = 1:7,
+                            int_rate = mean(int_rate),
+                            loan_amnt = mean(loan_amnt),
+                            home_mortgage = 1,
+                            home_owner = 0,
+                            home_rent = 0,
+                            purposeeducational = 0,
+                            purposesmallbusiness = 1,
+                            short_1_long_term_0 = getmode(short_1_long_term_0)
+                            )
+)
+predict_newdata_grade <- predict(mod01, newdata = newdata_grade, type = "response") #adding response we fit it to the sigmoid function
+predict_newdata_grade
+#being an A seems to approach you to default, weird.
+barplot(predict_newdata_grade,
+        main = "Default % vs Grades",
+        xlab = "Grades",
+        ylab = "Default %",
+        names.arg = c("A", "B", "C", "D", "E", "F", "G"),
+        col = "darkred",
+        horiz = FALSE)
+
+
+newdata_employment_length <- with(df,
+                 data.frame(
+                   annual_inc = mean(annual_inc),
+                   employment_length = c (1,2,3,4,5,6,7,8,9,10,11,12),
+                   grade = getmode(grade),
+                   int_rate = mean(int_rate),
+                   loan_amnt = mean(loan_amnt),
+                   home_mortgage = 1,
+                   home_owner = 0,
+                   home_rent = 0,
+                   purposeeducational = 0,
+                   purposesmallbusiness = 1,
+                   short_1_long_term_0 = getmode(short_1_long_term_0)
+                 )
+)
+predict_newdata_employment_length <- predict(mod01, newdata = newdata_employment_length, type = "response")
+predict_newdata_employment_length
+# having an employment length of 10+ years seems to approach you to default, this could be due to
+# the period one is productive at work.
+barplot(predict_newdata_employment_length,
+        main = "Default % vs Employment Length",
+        xlab = "Employment Length",
+        ylab = "Default %",
+        names.arg = c('n/a', '< 1 year', '1 year', '2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years', '9 years', '10+ years'),
+        col = "darkred",
+        horiz = FALSE)
+
+newdata_home_mortgage <- with(df,
+                                  data.frame(
+                                    annual_inc = mean(annual_inc),
+                                    employment_length = getmode(employment_length),
+                                    grade = getmode(grade),
+                                    int_rate = mean(int_rate),
+                                    loan_amnt = mean(loan_amnt),
+                                    home_mortgage = c(0,1),
+                                    home_owner = 0,
+                                    home_rent = 0,
+                                    purposeeducational = 0,
+                                    purposesmallbusiness = 1,
+                                    short_1_long_term_0 = getmode(short_1_long_term_0)
+                                  )
+)
+
+
+predict_newdata_home_mortgage <- predict(mod01, newdata = newdata_home_mortgage, type = "response")
+predict_newdata_home_mortgage
+#having a mortgage approaches you to default, compared to not having a mortgage.
+barplot(predict_newdata_home_mortgage,
+        main = "Default % vs Home Mortgage",
+        xlab = "Mortgage",
+        ylab = "Default %",
+        names.arg = c('Without Mortgage', 'With Mortgage'),
+        col = "darkred",
+        horiz = FALSE)
+default_total <- sum(contingency_table[2,])
+
+newdata_home_rent <- with(df,
+                              data.frame(
+                                annual_inc = mean(annual_inc),
+                                employment_length = getmode(employment_length),
+                                grade = getmode(grade),
+                                int_rate = mean(int_rate),
+                                loan_amnt = mean(loan_amnt),
+                                home_mortgage = 1,
+                                home_owner = 0,
+                                home_rent = c(0,1),
+                                purposeeducational = 0,
+                                purposesmallbusiness = 1,
+                                short_1_long_term_0 = getmode(short_1_long_term_0)
+                              )
+)
+predict_newdata_home_rent <- predict(mod01, newdata = newdata_home_rent, type = "response")
+predict_newdata_home_rent
+# having a rent approaches you to default, compared to not having a rent.
+barplot(predict_newdata_home_rent,
+        main = "Default % vs Home Rent",
+        xlab = "Rent",
+        ylab = "Default %",
+        names.arg = c('Without Rent', 'With Rent'),
+        col = "darkred",
+        horiz = FALSE)
+
+newdata_annual_inc <- with(df,
+                          data.frame(
+                            annual_inc = c(sort(annual_inc)[nrow(df)/2] - 1,
+                                           sort(annual_inc)[nrow(df)/2],
+                                           sort(annual_inc)[nrow(df)/2] + 1),
+                            employment_length = getmode(employment_length),
+                            grade = getmode(grade),
+                            int_rate = mean(int_rate),
+                            loan_amnt = mean(loan_amnt),
+                            home_mortgage = 1,
+                            home_owner = 0,
+                            home_rent = 0,
+                            purposeeducational = 0,
+                            purposesmallbusiness = 1,
+                            short_1_long_term_0 = getmode(short_1_long_term_0)
+                          )
+)
+predict_newdata_annual_inc<- predict(mod01, newdata = newdata_annual_inc, type = "response")
+predict_newdata_annual_inc
+#having low income approaches you to default, compared to having a high income.
+barplot(predict_newdata_annual_inc,
+        main = "Default % vs Annual Income",
+        xlab = "Annual Income",
+        ylab = "Default %",
+        names.arg = c('Sigma Below Median ', 'Median', 'Sigma Above Median'),
+        col = "darkred",
+        horiz = FALSE)
+
+newdata_int_rate <- with(df,
+                           data.frame(
+                             annual_inc = mean(annual_inc),
+                             employment_length = getmode(employment_length),
+                             grade = getmode(grade),
+                             int_rate = c(sort(int_rate)[nrow(df)/2] - 1,
+                                          sort(int_rate)[nrow(df)/2],
+                                          sort(int_rate)[nrow(df)/2] + 1),
+                             loan_amnt = mean(loan_amnt),
+                             home_mortgage = 1,
+                             home_owner = 0,
+                             home_rent = 0,
+                             purposeeducational = 0,
+                             purposesmallbusiness = 1,
+                             short_1_long_term_0 = getmode(short_1_long_term_0)
+                           )
+)
+
+
+predict_newdata_int_rate<- predict(mod01, newdata = newdata_int_rate, type = "response")
+predict_newdata_int_rate
+#having high interest rate approaches you to default, compared to having a low interest rate.
+barplot(predict_newdata_int_rate,
+        main = "Default % vs Interest Rate",
+        xlab = "Interest Rate",
+        ylab = "Default %",
+        names.arg = c('Sigma Below Median ', 'Median', 'Sigma Above Median'),
+        col = "darkred",
+        horiz = FALSE)
+
+
+newdata_loan_amnt <- with(df,
+                         data.frame(
+                           annual_inc = mean(annual_inc),
+                           employment_length = getmode(employment_length),
+                           grade = getmode(grade),
+                           int_rate = mean(int_rate),
+                           loan_amnt = c(sort(loan_amnt)[nrow(df)/2] - 1,
+                                         sort(loan_amnt)[nrow(df)/2],
+                                         sort(loan_amnt)[nrow(df)/2] + 1),
+                           home_mortgage = 1,
+                           home_owner = 0,
+                           home_rent = 0,
+                           purposeeducational = 0,
+                           purposesmallbusiness = 1,
+                           short_1_long_term_0 = getmode(short_1_long_term_0)
+                         )
+)
+predict_newdata_loan_amnt<- predict(mod01, newdata = newdata_loan_amnt, type = "response")
+predict_newdata_loan_amnt
+#having high loan amount approaches you to default, compared to having a low loan amount.
+barplot(predict_newdata_loan_amnt,
+        main = "Default % vs Loan Amount",
+        xlab = "Loan Amount",
+        ylab = "Default %",
+        names.arg = c('Sigma Below Median ', 'Median', 'Sigma Above Median'),
+        col = "darkred",
+        horiz = FALSE)
+```
+
+
+```{r}
+####################################################################
+# ODDS OF DEFAULT BASED ON WEIGHTS(COEFFICIENTS) GIVEN TO VARIABLES#
+####################################################################
+# How odds of default change by changing one unit of the variable. 
+temp_compare2 <- exp(cbind(OR = coef(mod01)))
+temp_compare2
+#Scaling
+compare2 <- as.data.frame(coef(mod01))
+odds_scaled <- c()
+compare2
+
+odds_scaled <- compare2["annual_inc",][1]
+odds_scaled <- rbind(odds_scaled,compare2["employment_length",][1])
+odds_scaled <- rbind(odds_scaled,compare2["grade",][1])
+odds_scaled <- rbind(odds_scaled,compare2["int_rate",][1])
+odds_scaled <- rbind(odds_scaled,compare2["loan_amnt",][1])
+odds_scaled <- rbind(odds_scaled,compare2["home_mortgage",][1])
+odds_scaled <- rbind(odds_scaled,compare2["home_owner",][1])
+odds_scaled <- rbind(odds_scaled,compare2["home_rent",][1])
+# odds_scaled <- rbind(odds_scaled,compare2["purposeeducational",][1])
+# odds_scaled <- rbind(odds_scaled,compare2["purposesmallbusiness",][1])
+# odds_scaled <- rbind(odds_scaled,compare2["short_1_long_term_0",][1])
+odds_scaled
+row.names(odds_scaled) <- c("annual_inc","employment_length", "grade", "int_rate", "loan_amnt", 
+                            "home_mortgage", "home_owner", "home_rent")
+odds_scaled
+colnames(odds_scaled)<- "Betas"
+odds_scaled
+odds_scaled <- as.data.frame(odds_scaled)
+main_variables_default <- odds_scaled %>% filter(`Betas` > (mean(`Betas`)*0.02))
+
+main_variables_default_ordered <- main_variables_default[order(-main_variables_default$`Betas`),]
+main_variables_default_ordered
+
+for(main_weight in 1:4){
+  for(variables in 1:dim(odds_scaled)[1]){
+    if(odds_scaled$`Betas`[variables] == main_variables_default_ordered[main_weight]){
+      print(row.names(odds_scaled)[variables])
+    }
+  }
+}
+# Main variables that approach people to default are home_rent,home_owner, home_mortgage,home_mortgage and int_rate.
+```
+
+
+```{r}
+########################
+# BINARY CLASSIFICATION##############################################################################
+########################
+##########
+# CUT-OFF#
+##########
+mod01.pred=predict(mod01,type="response")
+# max(mod01.pred)
+accuracy <- function(cut_off){
+  glm.pred <- rep(0 , dim(df)[1])
+  glm.pred[mod01.pred  > cut_off] = 1 #default
+  return (mean(glm.pred == df$default))
+}
+accuracy(0.0009)
+accuracy(0.001)
+accuracy(0.002)
+accuracy(0.003)
+accuracy(0.004)
+accuracy(0.005)
+accuracy(0.008)
+accuracy(0.009)
+accuracy(0.01)
+accuracy(0.02)
+accuracy(0.03)
+```
+
+
+```{r}
+# ###################
+# # CROSS-VALIDATION#
+# ###################
+# #VALIDATION SET
+# set.seed(1)
+# # Muestra de dim(df)[1]/2
+# train <- sample(dim(df)[1],dim(df)[1]/2)# tbl of data and rows to select
+# # length(train)
+# # Defaultx no incluye train data = test data
+# Defaultx <- df[-train,]
+# # Estimamos el modelo sin income  
+# glm.fit <- glm(default~. , data = df, family = binomial, subset = train)
+# # Predecir el test.  
+# glm.probs <- predict(glm.fit, Defaultx, type = "response")
+# 
+# 
+# model_error <- function(cut_off){
+#   # Crear un vector para guardar los resultados (No default) 
+#   glm.pred <- rep(0, dim(df)[1]/2)
+#   # Reemplazar NO(0) por YES(1) cuando la probabilidad es mayor del cut_off
+#   glm.pred[glm.probs > cut_off] = 1
+#   # Crear un vector con los resultados
+#   defaultVector <- Defaultx$default 
+#   # Calculala media  
+#   return(mean(glm.pred == defaultVector)*100)
+# }
+# model_error(0.001)
+# model_error(0.002)
+# model_error(0.003)
+# model_error(0.006)
+# model_error(0.007)
+# model_error(0.008)
+# model_error(0.009)
+# model_error(0.01)
+# model_error(0.02)
+# model_error(0.03)
+
+
+##########################
+# K-FOLD CROSS-VALIDATION#
+##########################
+# #Aqui se utiliza boot
+# library(boot)
+# # Semilla
+# set.seed(2)
+# 
+# # Estimar el modelo
+# # glm.fit1 <- glm(default~ int_rate+annual_inc+loan_amnt+home_rent , data = df, family = binomial)
+# glm.fit1 <- glm(default~ int_rate+annual_inc , data = df, family = binomial)
+# 
+# glm.fit1
+# # Crear un vector para guardar los resultados
+# cv.error <- rep(0,3)
+# 
+# # Guardar los resultados para cada K  validation set. K= {3,5,10} 
+# cv.error[1] <- cv.glm(df, glm.fit1, K=3)$delta[1]
+# cv.error[2] <- cv.glm(df, glm.fit1, K=5)$delta[1]
+# cv.error[3] <- cv.glm(df, glm.fit1, K=10)$delta[1]
+# 
+# cv.error
+# # low mean(cv.error) = high 1-mean...
+# 1- mean(cv.error) 
+# 0.9986289
+
+######################
+# PARAMETER SELECTION#
+# ######################
+# # CROSS-VALIDATION
+# set.seed(1)
+# # Muestra de dim(df)[1]/2
+# train <- sample(dim(df)[1],dim(df)[1]/2)# tbl of data and rows to select
+# # Defaultx no incluye train data = test data
+# Defaultx <- df[-train,]
+# 
+# glm.fit <- glm(default~., data = df, family = binomial, subset = train)
+# glm.probs <- predict(glm.fit, Defaultx, type = "response")
+# 
+# 
+# glm.pred <- rep(0 , dim(df)[1])
+# cut_off <- 0.03
+# glm.pred[mod01.pred  > cut_off] = 1 #default
+# 
+# defaultVector <- Defaultx$default 
+# mean(glm.pred == defaultVector)
+# 
+# # K-FOLDS
+# #Aqui se utiliza boot
+# # Semilla
+# set.seed(2)
+# 
+# # Estimar el modelo
+# glm.fit1 <- glm(default~., data = df, family = binomial)
+# glm.fit1
+# # Crear un vector para guardar los resultados
+# cv.error <- rep(0,3)
+# 
+# 
+# # Guardar los resultados para cada K  validation set. K= {3,5,10} 
+# cv.error[1] <- cv.glm(df, glm.fit1, K=3)$delta[1]
+# cv.error[2] <- cv.glm(df, glm.fit1, K=5)$delta[1]
+# cv.error[3] <- cv.glm(df, glm.fit1, K=10)$delta[1]
+# 
+# cv.error
+# # low mean(cv.error) = high 1-mean...
+# 1- mean(cv.error)
+# 0.9986289
+# END OF PREDICTION ###################################################################################
+```
+
+
+```{r}
+###########################################################
+# MATRIX CONFUSION AND ROC CURVE(AREA UNDER THE CURVE(AUC))############################################
+###########################################################
+
+#TRAINING AND TESTING DATA
+set.seed(1234)
+n=nrow(df)
+id_train <- sample(1:n , 0.90*n)
+df.train = df[id_train,]
+df.test = df[-id_train,]
+nrow(df.train)
+ncol(df.train)
+colnames(df.train)
+
+# LOGISTIC REGRESSION TRAIN MODEL
+df.glm0<-glm(default~.,family=binomial,df.train); 
+summary(df.glm0)
+
+# # CROSS VALIDATION AND PREDICTION WITH LOGISTIC REGRESSION 
+# df.glm1<-glm(default~int_rate+annual_inc,family=binomial,df.train); 
+# AIC(df.glm0)
+# AIC(df.glm1)
+# BIC(df.glm0)
+# BIC(df.glm1)
+```
+
+
+```{r}
+######################################################
+# LOGISTIC REGRESSION: CLASSIFICATION DECISION MAKING#
+######################################################
+ggplot(data = as.data.frame(predict(df.glm0))) +
+  geom_histogram(aes(x = predict(df.glm0)),
+                 binwidth = .1) +
+  xlim(-10,0) + xlab("Prediction Values")
+
+
+ggplot(data = as.data.frame(predict(df.glm0, type="response"))) +
+  geom_histogram(aes(x = predict(df.glm0, type="response")),
+                 binwidth = .0001) +
+  xlim(0,0.01) + xlab("Prediction Values")
+
+
+
+# table(predict(df.glm0,type="response") > 0.005)
+# table(predict(df.glm0,type="response") > 0.008)
+# table(predict(df.glm0,type="response") > 0.009)
+# table(predict(df.glm0,type="response") > 0.01)
+# table(predict(df.glm0,type="response") > 0.02)
+# table(predict(df.glm0,type="response") > 0.03)
+```
+
+
+```{r}
+#########################################
+# PREDICTION IN-SAMPLE AND OUT OF SAMPLE#######################################################
+#########################################
+
+#####################################
+# IN SAMPLE TRYING DIFFERENT CUT_OFFS####################################################
+#####################################
+#######################
+cut_off <- 0.001300000#
+#######################
+prob.glm0.insample <- predict(df.glm0,type="response")
+predicted.glm0.insample <- (prob.glm0.insample > cut_off)
+predicted.glm0.insample <- as.numeric(predicted.glm0.insample)
+###################
+# CONFUSION MATRIX#
+###################
+table(df.train$default, predicted.glm0.insample, dnn=c("Truth","Predicted"))
+########
+# ERROR#
+########
+mean(ifelse(df.train$default != predicted.glm0.insample, 1, 0))
+
+
+#################
+cut_off <- 0.03#
+################
+prob.glm0.insample <- predict(df.glm0,type="response")
+predicted.glm0.insample <- (prob.glm0.insample > cut_off)
+predicted.glm0.insample <- as.numeric(predicted.glm0.insample)
+###################
+# CONFUSION MATRIX#
+###################
+table(df.train$default, predicted.glm0.insample, dnn=c("Truth","Predicted"))
+########
+# ERROR#
+########
+mean(ifelse(df.train$default != predicted.glm0.insample, 1, 0))
+
+#################
+cut_off <- 0.0009#
+################
+prob.glm0.insample <- predict(df.glm0,type="response")
+predicted.glm0.insample <- (prob.glm0.insample > cut_off)
+predicted.glm0.insample <- as.numeric(predicted.glm0.insample)
+###################
+# CONFUSION MATRIX#
+###################
+table(df.train$default, predicted.glm0.insample, dnn=c("Truth","Predicted"))
+########
+# ERROR#
+########
+mean(ifelse(df.train$default != predicted.glm0.insample, 1, 0))
+```
+
+
+```{r}
+################
+# OUT OF SAMPLE####################################################
+################
+# cut_off <- 0.0130
+# prob.glm0.outsample <- predict(df.glm0,df.test,type="response")
+# predicted.glm0.outsample <-  prob.glm0.outsample> cut_off
+# predicted.glm0.outsample <- as.numeric(predicted.glm0.outsample)
+# ###################
+# # CONFUSION MATRIX#
+# ###################
+# table(df.test$default, predicted.glm0.outsample, dnn=c("Truth","Predicted"))
+# ########
+# # ERROR#
+# ########
+# mean(ifelse(df.test$default != predicted.glm0.outsample, 1, 0))
+#Higher error than in sample.
+```
+
+
+```{r}
+############
+# ROC CURVE#####################################################################################################
+############
+pred <- prediction(prob.glm0.insample, df.test$default)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+#Get the AUC
+unlist(slot(performance(pred, "auc"), "y.values"))
+# [1] 0.7262993
+
+###################
+# CROSS-VALIDATION#
+###################
+pcut = cut_off
+#Symmetric cost
+cost1 <- function(r, pi){
+  mean(((r==0)&(pi>pcut)) | ((r==1)&(pi<pcut)))
+}
+#Asymmetric cost
+cost2 <- function(r, pi){
+  weight1 = 2
+  weight0 = 1
+  c1 = (r==1)&(pi<pcut) #logical vector - true if actual 1 but predict 0
+  c0 = (r==0)&(pi>pcut) #logical vector - true if actual 0 but predict 1
+  return(mean(weight1*c1+weight0*c0))
+}
+
+
+library(boot)
+df.glm3<-glm(default~.,family=binomial,df);  
+cv.result = cv.glm(df, df.glm3 , cost1, 10)
+cv.result$delta
+# [1] 0.00137371 0.00137371
+```
+
+
+```{r}
+##############################
+# OPTIMAL CUT-OFF PROBABILITY#############################################################
+##############################
+#######################
+# COST IN TRAINING SET#
+#######################
+searchgrid = seq(0.0001,0.02, 0.0001)
+#result is a 99x2 matrix, the 1st col stores the cut-off p, the 2nd column stores the cost
+result = cbind(searchgrid, NA)
+#in the cost function, both r and pi are vectors, r=truth, pi=predicted probability
+cost1 <- function(r, pi){
+  weight1 = 10
+  weight0 = 1
+  c1 = (r==1)&(pi<pcut) #logical vector - true if actual 1 but predict 0. FP (False Positive)
+  c0 = (r==0)&(pi>pcut) #logical vector - true if actual 0 but predict 1. FN (False Negative)
+  return(mean(weight1*c1+weight0*c0))
+}
+df.glm1<-glm(default~.,family=binomial,df.train)
+prob <- predict(df.glm1,type="response")
+for(i in 1:length(searchgrid))
+{
+  pcut <- result[i,1]
+  #assign the cost to the 2nd col
+  result[i,2] <- cost1(df.train$default, prob)
+}
+plot(result, ylab="Cost in Training Set")
+result[which.min(result[,2]),]
+# searchgrid            
+# 0.01300000 0.01392367
+
+
+
+
+# ###################
+# # CROSS-VALIDATION#
+# ###################
+# searchgrid = seq(0.001,0.07, 0.001)
+# searchgrid
+# 
+# result = cbind(searchgrid, NA)
+# cost1 <- function(r, pi){
+#   weight1 = 10
+#   weight0 = 1
+#   c1 = (r==1)&(pi<pcut) #logical vector - true if actual 1 but predict 0
+#   c0 = (r==0)&(pi>pcut) #logical vector - true if actual 0 but predict 1
+#   return(mean(weight1*c1+weight0*c0))
+# }
+# 
+# 
+# df.glm1<-glm(default~.,family=binomial,df.train) 
+# for(i in 1:length(searchgrid)){
+#   pcut <- result[i,1]
+#   result[i,2] <- cv.glm(data=df.tra in,glmfit=df.glm1,cost=cost1, K=3)$delta[2]
+# }
+# plot(result, ylab="CV Cost")
+# 
+# result[which.min(result[,2]),]
+
+```
+

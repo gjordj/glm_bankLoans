@@ -1,0 +1,8 @@
+"0",""
+"0","# DEFAULT VS INT_RATE#"
+"0","######################"
+"0","ggplot(data = df, aes(x = as.factor(default), y = int_rate)) +"
+"0","  geom_boxplot() +"
+"0","  ggtitle(""Interest Rate"") +"
+"0","  xlab(""Default"")+"
+"0","  ylab(""Interest Rate"")"

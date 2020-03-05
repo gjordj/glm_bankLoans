@@ -1,0 +1,7 @@
+"0","############"
+"0","# ROC CURVE#####################################################################################################"
+"0","############"
+"0","pred <- prediction(prob.glm0.insample, df.test$default)"
+"2","Error in prediction(prob.glm0.insample, df.test$default) : 
+  Number of predictions in each run must be equal to the number of labels for each run.
+"
